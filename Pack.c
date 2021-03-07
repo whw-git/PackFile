@@ -56,12 +56,12 @@ U32 GetFileType(U8 *filePath, U32 fileNameSize, U32 *fileType){
 }
 
 U32 FilesInfoShow(FileTlv *fileTlvs, U32 *fileNum) {
-    int fileIndex;
-    int fileInfoIndex;
+    U32 fileIndex;
+    U32 fileInfoIndex;
     U32 fileValueIndex;
     
     for (fileIndex = 0; fileIndex < *fileNum; fileIndex++) {
-        printf("fileType : %d\tfileLen : %d\n", fileTlvs[fileIndex].fileType, fileTlvs[fileIndex].fileLen);
+        printf("fileIndex  : %d\tfileType : %d\tfileLen : %d\n",fileIndex , fileTlvs[fileIndex].fileType, fileTlvs[fileIndex].fileLen);
         for (fileInfoIndex = 0; fileInfoIndex < FILE_INFO_NUM; fileInfoIndex++) {
             printf("fileInfoType : %d\tfileInfoLen : %d\n", fileTlvs[fileIndex].fileValue[fileInfoIndex].fileInfoType,
                                                              fileTlvs[fileIndex].fileValue[fileInfoIndex].fileInfoLen);
@@ -78,7 +78,7 @@ U32 PhaseFile(U8 *filePath, U32 fileNameSize, FileTlv *fileTlvs, U32 *fileNum) {
     FileInfo *fileInfo = (FileInfo *) malloc(sizeof(FileInfo) * 2);
     U32 fileType;
     U32 fileLen = 0;
-    
+    U8 currentChar;
     GetFileType(filePath, fileNameSize, &fileType);
     
     /* 填充文件名 */
@@ -91,11 +91,13 @@ U32 PhaseFile(U8 *filePath, U32 fileNameSize, FileTlv *fileTlvs, U32 *fileNum) {
     //读文件到缓冲区
     FILE *fileRead = fopen(filePath,"r+");
     U8 *pFile=fileBuffer;
+    currentChar = fgetc(fileRead);
     while (!feof(fileRead))
     {
-        *pFile = fgetc(fileRead);
+        *pFile = currentChar;
         pFile++;
         fileLen++;
+        currentChar = fgetc(fileRead);
     }
     pFile = NULL;
     fclose(fileRead);
@@ -103,7 +105,7 @@ U32 PhaseFile(U8 *filePath, U32 fileNameSize, FileTlv *fileTlvs, U32 *fileNum) {
     fileInfo[1].fileInfoValue = fileBuffer;
     
     fileTlvs[*fileNum].fileType = fileType;
-    fileTlvs[*fileNum].fileLen = 4 * sizeof(U32) + fileInfo[0].fileInfoLen + fileInfo[0].fileInfoLen;
+    fileTlvs[*fileNum].fileLen = 4 * sizeof(U32) + fileInfo[0].fileInfoLen + fileInfo[1].fileInfoLen;
     fileTlvs[*fileNum].fileValue =  fileInfo;
     *fileNum = *fileNum + 1;
     return 0;
@@ -123,10 +125,11 @@ U32 PackBuffer(FileTlv *fileTlvs, U32 *fileNum) {
     }
     U8 *fileHead = (U8 *) malloc(sizeof(U8) * packSize + sizeof(U32));
     printf("Totle = %d\n",sizeof(U8) * packSize + sizeof(U32));
+    /* pck文件头 */
     pointCurrent = fileHead;
-
+    /* 文件个数 */
     pointU32 = (U32 *) (void *)pointCurrent;
-    *pointU32 = packSize;
+    *pointU32 = *fileNum;
     pointU32 ++;
     pointCurrent = (U8 *) (void *)pointU32;
 
@@ -159,27 +162,26 @@ U32 PackBuffer(FileTlv *fileTlvs, U32 *fileNum) {
             }
         }
     }
-    
-
-    FILE *fileWrite = fopen(WRITE_FILE_PATH,"w");
-    //写文件类型
+    FILE *fileWrite = fopen(WRITE_FILE_PATH,"wb");
+    //写文件
     fwrite(fileHead,sizeof(U8),sizeof(U8) * packSize + sizeof(U32), fileWrite);
-    // //写文件名长度
-    // fwrite(&fileNameSize,sizeof(U32),1, fileWrite);
-    // //写文件名
-    // fwrite(filePath,sizeof(U8),fileNameSize, fileWrite);
 
-    // //写文件内容长度
-    // fwrite(&fileLen,sizeof(U32),1, fileWrite);
-    // //写文件
-    // fwrite(fileBuffer,sizeof(U8),fileLen, fileWrite);
     fclose(fileWrite);
 }
 
-U32 UnPackFile(U8 *filePath, void *fileBuffer, U64 *fileSize) {
+ 
+U32 UnPackFile(U8 *filePath, FileTlv** fileTlvs,U32 *fileNum ) {
+    
+    U32 *pointU32;
+    U8 *pointCurrent;
+    U32 fileIndex = 0;
+    int fileInfoIndex = 0;
+    U32 fileValueIndex = 0;
+    FileInfo *fileInfo;
+    U8 *fileInfoValue;
+    FILE *fileRead = fopen(filePath,"rb");
+    
 
-    FILE *fileRead = fopen(filePath,"r");
-    U32 A = 99;
     fseek(fileRead, 0, SEEK_END);       
 	U64 tempFileSize = ftell (fileRead);
 
@@ -187,33 +189,101 @@ U32 UnPackFile(U8 *filePath, void *fileBuffer, U64 *fileSize) {
     void *tempFileBuffer = (void *)malloc(sizeof(U8) * tempFileSize);
     fread(tempFileBuffer, sizeof(U8), tempFileSize, fileRead);
 
-    //A =* (U32 *)tempFileBuffer;
-    //printf("%d" ,tempFileBuffer);
-    //fileBuffer = tempFileBuffer;
+    /* pck文件头 */
+    U8* fileHead = tempFileBuffer;
+    pointCurrent = fileHead;
+    /* 文件个数 */
+    pointU32 = (U32 *) (void *)pointCurrent;
+    *fileNum = *pointU32;
+    pointU32 ++;
+    pointCurrent = (U8 *) (void *)pointU32;
+    /* 申请文件Tlvs */
+    (*fileTlvs) = (FileTlv *) malloc(sizeof(FileTlv) * (*fileNum));
+    if ((*fileTlvs) == NULL)
+    {
+        printf("fuck\n");
+    }
     
-    printf("fileSize = %d\n", A);
-    *fileSize = tempFileSize;
+    /* 第一层，pck的所有信息，包含所有文件 */
+    for(fileIndex = 0; fileIndex < *fileNum; fileIndex++) {
+
+        pointU32 = (U32 *) (void *)pointCurrent;
+        U32 fileType = *pointU32;
+        pointU32 ++;
+        U32 fileLen = *pointU32;
+        pointU32 ++;
+        pointCurrent = (U8 *) (void *)pointU32;
+
+        (*fileTlvs)[fileIndex].fileType = fileType;
+        (*fileTlvs)[fileIndex].fileLen = fileLen;
+
+        /* 申请文件FileInfo */
+        fileInfo = (FileInfo *) malloc(sizeof(FileInfo) * 2);
+        (*fileTlvs)[fileIndex].fileValue =  fileInfo;
+
+        /* 第二层，单个文件的所有信息，包含文件名和文件内容 */
+        for (fileInfoIndex = 0; fileInfoIndex < FILE_INFO_NUM; fileInfoIndex++) {
+
+            pointU32 = (U32 *) (void *)pointCurrent;
+            (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoType = *pointU32;
+            pointU32 ++;
+            (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoLen = *pointU32;
+            pointU32 ++;
+            pointCurrent = (U8 *) (void *)pointU32;
+
+            /* 申请Value */
+            fileInfoValue = (U8 *) malloc(sizeof(U8) * (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoLen);
+            (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoValue =  fileInfoValue;
+            
+            /* 第三层，单个文件的单个信息，如文件名信息或文件内容信息 */
+            for (fileValueIndex = 0; fileValueIndex < (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoLen; fileValueIndex++) {
+                (*fileTlvs)[fileIndex].fileValue[fileInfoIndex].fileInfoValue[fileValueIndex] = *pointCurrent;
+                pointCurrent++;
+            }
+        }
+    }
+    
+
+    //fileBuffer = tempFileBuffer;
     return 0;
 }
 
+U32 FreeTlv(FileTlv *fileTlvs, U32 *fileNum) {
+    U32 fileIndex;
+    U32 fileInfoIndex;
+    for (fileIndex = 0; fileIndex < *fileNum; fileIndex++) { 
+        for (fileInfoIndex = 0; fileInfoIndex < FILE_INFO_NUM; fileInfoIndex++) {
+            free(fileTlvs[fileIndex].fileValue[fileInfoIndex].fileInfoValue);
+        }
+        free(fileTlvs[fileIndex].fileValue);
+    }
+}
 
 int main(){
     U8 *fileBuffer;
     U64 fileSize = 0;
     U32 *type;
     U32 fileNum = 0;
+    U32 unPackFileNum = 0;
     U8 path1[] = "d:\\cc.txt";
     U8 path2[] = "d:\\d.txt";
     U8 path3[] = "d:\\map.mp3";
     /* 最多保存10个文件 */
     FileTlv *fileTlvs = (FileTlv *)malloc(sizeof(FileTlv) * MAX_FILE_TLV_SIZE);
-
+    FileTlv *unPackFileTlvs = NULL;
     PhaseFile(path1, sizeof(path1)/sizeof(U8), fileTlvs, &fileNum);
-    //PhaseFile(path2, sizeof(path2)/sizeof(U8), fileTlvs, &fileNum);
+    PhaseFile(path2, sizeof(path2)/sizeof(U8), fileTlvs, &fileNum);
     PhaseFile(path3, sizeof(path3)/sizeof(U8), fileTlvs, &fileNum);
     FilesInfoShow(fileTlvs, &fileNum);
     PackBuffer(fileTlvs, &fileNum);
-    //UnPackFile("D:\\output\\output.dat", fileBuffer, &fileSize);
+    FreeTlv(fileTlvs, &fileNum);
+    UnPackFile("D:\\output\\output.dat", &unPackFileTlvs, &unPackFileNum);
+
+    printf("======================%d========================\n",unPackFileNum);
+    if(unPackFileTlvs == NULL)
+        printf("FUCK");
+    FilesInfoShow(unPackFileTlvs, &unPackFileNum);
+    //FilesInfoShow(unPackFileTlvs, &unPackFileNum);
     //type = (U32 *) fileBuffer;
 
     //printf("fileSize = %d", type);
